@@ -5,12 +5,18 @@
   "main": "app.js",
   "scripts": {
     "start": "node app",
+    "test": "node lib/routes/test.js",
     "jslint": "eslint app.js lib"
   },
   "author": "",
   "license": "MIT",
   "dependencies": {
     "@jambonz/node-client-ws": "^0.1.78",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "nocache": "^4.0.0",
+    "passport": "^0.7.0",
     "pino": "^9.6.0"
   },
   "devDependencies": {

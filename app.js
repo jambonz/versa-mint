@@ -31,7 +31,14 @@ app.use(cors({
 }));
 app.use('/', (req, res, next) => {next();}, apiRoutes);
 
-require('./lib/routes')({logger, makeService});
+const ongoingSessions = new Map();
+
+app.locals = {
+  logger,
+  ongoingSessions
+}
+
+require('./lib/routes')({logger, makeService, ongoingSessions});
 
 
 server.listen(port, () => {

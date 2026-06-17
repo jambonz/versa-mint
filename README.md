@@ -36,6 +36,19 @@ npm start
 - **VERSA_API_KEY**: Versa API key
 - **HTTP_PORT**: Web server port (default: 3000)
 - **LOGLEVEL**: Logging level (default: debug)
+- **HTTP_USERNAME**: Username for websocket HTTP Basic auth (optional)
+- **HTTP_PASSWORD**: Password for websocket HTTP Basic auth (optional)
+
+## WebSocket Authentication
+
+The websocket endpoints (e.g. `/proxy-vapi`) support optional HTTP Basic
+authentication. Set `HTTP_USERNAME` and `HTTP_PASSWORD` to enable it; when set,
+incoming websocket upgrade requests must include a matching
+`Authorization: Basic` header or they are rejected with `401 Unauthorized`.
+
+In jambonz, configure the application's websocket URL with the same username and
+password so jambonz sends these credentials on connect. Authentication is only
+enabled when **both** variables are set; otherwise it is disabled.
 
 ## DTMF Format
 

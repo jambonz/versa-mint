@@ -49,6 +49,12 @@ describe('verifySipKey (unit)', () => {
     expect(verifySipKey(sessionWith({'x-versa-sip-key': [SIP_KEY, SIP_KEY]}))).toBe(true);
   });
 
+  test('matches header name case-insensitively (e.g. X-versa-sip-key from the INVITE)', () => {
+    process.env.X_VERSA_SIP_KEY = SIP_KEY;
+    expect(verifySipKey(sessionWith({'X-versa-sip-key': SIP_KEY}))).toBe(true);
+    expect(verifySipKey(sessionWith({'X-Versa-Sip-Key': SIP_KEY}))).toBe(true);
+  });
+
   test('returns false when header is missing', () => {
     process.env.X_VERSA_SIP_KEY = SIP_KEY;
     expect(verifySipKey(sessionWith({}))).toBe(false);

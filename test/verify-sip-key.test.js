@@ -4,7 +4,7 @@ const {startApp, fakeJambonzClient, startFakeUpstream} = require('./helpers');
 
 jest.setTimeout(10000);
 
-// The expected secret value; matches what we pass as X_TWILIO_SIP_KEY env var.
+// The expected secret value; matches what we pass as X_VERSA_SIP_KEY env var.
 const SIP_KEY = 'super-secret-sip-key-value';
 
 // ---------------------------------------------------------------------------
@@ -13,7 +13,7 @@ const SIP_KEY = 'super-secret-sip-key-value';
 
 describe('verifySipKey (unit)', () => {
   let verifySipKey;
-  const ORIGINAL = process.env.X_TWILIO_SIP_KEY;
+  const ORIGINAL = process.env.X_VERSA_SIP_KEY;
 
   beforeEach(() => {
     jest.resetModules();
@@ -21,60 +21,60 @@ describe('verifySipKey (unit)', () => {
   });
 
   afterEach(() => {
-    if (ORIGINAL === undefined) delete process.env.X_TWILIO_SIP_KEY;
-    else process.env.X_TWILIO_SIP_KEY = ORIGINAL;
+    if (ORIGINAL === undefined) delete process.env.X_VERSA_SIP_KEY;
+    else process.env.X_VERSA_SIP_KEY = ORIGINAL;
   });
 
   const sessionWith = (headers) => ({sip: {headers}});
 
-  test('returns true (check disabled) when X_TWILIO_SIP_KEY is not set', () => {
-    delete process.env.X_TWILIO_SIP_KEY;
-    expect(verifySipKey(sessionWith({'x-twilio-sip-key': 'anything'}))).toBe(true);
+  test('returns true (check disabled) when X_VERSA_SIP_KEY is not set', () => {
+    delete process.env.X_VERSA_SIP_KEY;
+    expect(verifySipKey(sessionWith({'x-versa-sip-key': 'anything'}))).toBe(true);
   });
 
-  test('returns true (check disabled) when X_TWILIO_SIP_KEY is empty/whitespace', () => {
-    process.env.X_TWILIO_SIP_KEY = '   ';
+  test('returns true (check disabled) when X_VERSA_SIP_KEY is empty/whitespace', () => {
+    process.env.X_VERSA_SIP_KEY = '   ';
     expect(verifySipKey(sessionWith({}))).toBe(true);
-    process.env.X_TWILIO_SIP_KEY = '';
+    process.env.X_VERSA_SIP_KEY = '';
     expect(verifySipKey(sessionWith({}))).toBe(true);
   });
 
   test('returns true when header matches the configured value', () => {
-    process.env.X_TWILIO_SIP_KEY = SIP_KEY;
-    expect(verifySipKey(sessionWith({'x-twilio-sip-key': SIP_KEY}))).toBe(true);
+    process.env.X_VERSA_SIP_KEY = SIP_KEY;
+    expect(verifySipKey(sessionWith({'x-versa-sip-key': SIP_KEY}))).toBe(true);
   });
 
   test('returns true when header arrives as a repeated (array) value', () => {
-    process.env.X_TWILIO_SIP_KEY = SIP_KEY;
-    expect(verifySipKey(sessionWith({'x-twilio-sip-key': [SIP_KEY, SIP_KEY]}))).toBe(true);
+    process.env.X_VERSA_SIP_KEY = SIP_KEY;
+    expect(verifySipKey(sessionWith({'x-versa-sip-key': [SIP_KEY, SIP_KEY]}))).toBe(true);
   });
 
   test('returns false when header is missing', () => {
-    process.env.X_TWILIO_SIP_KEY = SIP_KEY;
+    process.env.X_VERSA_SIP_KEY = SIP_KEY;
     expect(verifySipKey(sessionWith({}))).toBe(false);
   });
 
   test('returns false when header value is wrong', () => {
-    process.env.X_TWILIO_SIP_KEY = SIP_KEY;
-    expect(verifySipKey(sessionWith({'x-twilio-sip-key': 'wrong'}))).toBe(false);
+    process.env.X_VERSA_SIP_KEY = SIP_KEY;
+    expect(verifySipKey(sessionWith({'x-versa-sip-key': 'wrong'}))).toBe(false);
   });
 
   test('returns false when sip headers are entirely absent', () => {
-    process.env.X_TWILIO_SIP_KEY = SIP_KEY;
+    process.env.X_VERSA_SIP_KEY = SIP_KEY;
     expect(verifySipKey({})).toBe(false);
   });
 
   test('does not throw when session is null/undefined and key is set', () => {
-    process.env.X_TWILIO_SIP_KEY = SIP_KEY;
+    process.env.X_VERSA_SIP_KEY = SIP_KEY;
     expect(verifySipKey(null)).toBe(false);
     expect(verifySipKey(undefined)).toBe(false);
   });
 
   test('accepts an optional logger: warn when disabled, info when rejected', () => {
     const logger = {info: jest.fn(), warn: jest.fn()};
-    delete process.env.X_TWILIO_SIP_KEY;
+    delete process.env.X_VERSA_SIP_KEY;
     expect(verifySipKey(sessionWith({}), logger)).toBe(true);
-    process.env.X_TWILIO_SIP_KEY = SIP_KEY;
+    process.env.X_VERSA_SIP_KEY = SIP_KEY;
     expect(verifySipKey(sessionWith({}), logger)).toBe(false);
     expect(logger.warn).toHaveBeenCalledTimes(1);
     expect(logger.info).toHaveBeenCalledTimes(1);
@@ -82,8 +82,8 @@ describe('verifySipKey (unit)', () => {
 
   test('does not log the secret value on rejection', () => {
     const logger = {info: jest.fn(), warn: jest.fn()};
-    process.env.X_TWILIO_SIP_KEY = SIP_KEY;
-    verifySipKey(sessionWith({'x-twilio-sip-key': 'attacker-guess'}), logger);
+    process.env.X_VERSA_SIP_KEY = SIP_KEY;
+    verifySipKey(sessionWith({'x-versa-sip-key': 'attacker-guess'}), logger);
     const logged = JSON.stringify(logger.info.mock.calls);
     expect(logged).not.toContain(SIP_KEY);
     expect(logged).not.toContain('attacker-guess');
@@ -94,13 +94,13 @@ describe('verifySipKey (unit)', () => {
 // Integration tests — route declines a call missing/invalid header
 // ---------------------------------------------------------------------------
 
-describe('proxy-vapi-dtmf: x-twilio-sip-key guard (integration)', () => {
+describe('proxy-vapi-dtmf: x-versa-sip-key guard (integration)', () => {
   let upstream, ctx;
 
   beforeEach(async() => {
     upstream = await startFakeUpstream();
     ctx = await startApp({
-      env: {VERSA_BASE_URL: upstream.baseUrl, VERSA_API_KEY: 'test-key', X_TWILIO_SIP_KEY: SIP_KEY}
+      env: {VERSA_BASE_URL: upstream.baseUrl, VERSA_API_KEY: 'test-key', X_VERSA_SIP_KEY: SIP_KEY}
     });
   });
 
@@ -119,7 +119,7 @@ describe('proxy-vapi-dtmf: x-twilio-sip-key guard (integration)', () => {
   };
 
   test('valid header => proceeds with answer+gather (no decline)', async() => {
-    const client = await connect({headers: {'x-twilio-sip-key': SIP_KEY}});
+    const client = await connect({headers: {'x-versa-sip-key': SIP_KEY}});
     try {
       client.sendSessionNew();
       const frame = await client.waitFor((f) => f.type === 'ack', {timeoutMs: 2500});
@@ -152,7 +152,7 @@ describe('proxy-vapi-dtmf: x-twilio-sip-key guard (integration)', () => {
   }, 6000);
 
   test('wrong header value => sip:decline 403', async() => {
-    const client = await connect({headers: {'x-twilio-sip-key': 'not-the-key'}});
+    const client = await connect({headers: {'x-versa-sip-key': 'not-the-key'}});
     try {
       client.sendSessionNew();
       const frame = await client.waitFor(
@@ -183,15 +183,15 @@ describe('proxy-vapi-dtmf: x-twilio-sip-key guard (integration)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Integration — when X_TWILIO_SIP_KEY is unset the guard is disabled
+// Integration — when X_VERSA_SIP_KEY is unset the guard is disabled
 // ---------------------------------------------------------------------------
 
-describe('proxy-vapi-dtmf: guard disabled when X_TWILIO_SIP_KEY unset', () => {
+describe('proxy-vapi-dtmf: guard disabled when X_VERSA_SIP_KEY unset', () => {
   let upstream, ctx, client;
 
   beforeEach(async() => {
     upstream = await startFakeUpstream();
-    // Note: X_TWILIO_SIP_KEY intentionally NOT passed
+    // Note: X_VERSA_SIP_KEY intentionally NOT passed
     ctx = await startApp({env: {VERSA_BASE_URL: upstream.baseUrl, VERSA_API_KEY: 'test-key'}});
     client = fakeJambonzClient(ctx.baseWsUrl, {path: '/proxy-vapi-dtmf'});
     await client.connect();
@@ -217,11 +217,11 @@ describe('proxy-vapi-dtmf: guard disabled when X_TWILIO_SIP_KEY unset', () => {
 // Integration — proxy-vapi route shares the same guard (no copy-paste drift)
 // ---------------------------------------------------------------------------
 
-describe('proxy-vapi: x-twilio-sip-key guard (integration)', () => {
+describe('proxy-vapi: x-versa-sip-key guard (integration)', () => {
   let ctx, client;
 
   beforeEach(async() => {
-    ctx = await startApp({env: {X_TWILIO_SIP_KEY: SIP_KEY}});
+    ctx = await startApp({env: {X_VERSA_SIP_KEY: SIP_KEY}});
   });
 
   afterEach(async() => {
@@ -239,7 +239,7 @@ describe('proxy-vapi: x-twilio-sip-key guard (integration)', () => {
   };
 
   test('valid header => proceeds with dial (no decline)', async() => {
-    await connect({headers: {'x-twilio-sip-key': SIP_KEY}});
+    await connect({headers: {'x-versa-sip-key': SIP_KEY}});
     client.sendSessionNew();
     const frame = await client.waitFor((f) => f.type === 'ack', {timeoutMs: 2500});
     const verbs = frame.data.map((v) => v.verb);
@@ -264,11 +264,11 @@ describe('proxy-vapi: x-twilio-sip-key guard (integration)', () => {
 // Integration — dial-test-mint route is also guarded
 // ---------------------------------------------------------------------------
 
-describe('dial-test-mint: x-twilio-sip-key guard (integration)', () => {
+describe('dial-test-mint: x-versa-sip-key guard (integration)', () => {
   let ctx, client;
 
   beforeEach(async() => {
-    ctx = await startApp({env: {X_TWILIO_SIP_KEY: SIP_KEY}});
+    ctx = await startApp({env: {X_VERSA_SIP_KEY: SIP_KEY}});
   });
 
   afterEach(async() => {
@@ -292,7 +292,7 @@ describe('dial-test-mint: x-twilio-sip-key guard (integration)', () => {
   test('valid header => proceeds with dial', async() => {
     client = fakeJambonzClient(ctx.baseWsUrl, {
       path: '/dial-test-mint',
-      sessionData: {sip: {headers: {'x-twilio-sip-key': SIP_KEY}}}
+      sessionData: {sip: {headers: {'x-versa-sip-key': SIP_KEY}}}
     });
     await client.connect();
     client.sendSessionNew();

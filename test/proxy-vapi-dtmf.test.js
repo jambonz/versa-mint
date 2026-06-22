@@ -23,6 +23,18 @@ function waitForAckWithVerb(client, verbName) {
   );
 }
 
+/**
+ * Wait for a 'command'/redirect frame that contains a specific verb.
+ * The error/timeout catch path uses session.send() (not reply()), which jambonz
+ * receives as a command/redirect frame — that is what force-closes the call.
+ */
+function waitForCommandWithVerb(client, verbName) {
+  return client.waitFor(
+    (f) => f.type === 'command' && Array.isArray(f.data) && f.data.some((v) => v.verb === verbName),
+    {timeoutMs: 2500}
+  );
+}
+
 /** pull a single verb object out of an ack frame */
 function pickVerb(frame, verbName) {
   return frame.data.find((v) => v.verb === verbName);
@@ -370,10 +382,13 @@ describe('proxy-vapi-dtmf: /codeGather upstream HTTP 500', () => {
     await upstream.close();
   });
 
-  test('HTTP 500 response body is not JSON — JSON parse throws — catch yields hangup', async() => {
-    // 500 + non-JSON body => response.json() throws, landing in catch block
+  test('HTTP 500 response body is not JSON — JSON parse throws — catch yields hangup via command/redirect', async() => {
+    // 500 + non-JSON body => response.json() throws, landing in catch block.
+    // The catch path uses session.send(), so jambonz gets a command/redirect frame.
     client.sendHook('/codeGather', {reason: 'dtmfDetected', digits: '1234'});
-    const frame = await waitForAckWithVerb(client, 'hangup');
+    const frame = await waitForCommandWithVerb(client, 'hangup');
+    expect(frame.type).toBe('command');
+    expect(frame.command).toBe('redirect');
     const hangupVerb = pickVerb(frame, 'hangup');
     expect(hangupVerb).not.toBeUndefined();
     expect(hangupVerb.verb).toBe('hangup');
@@ -381,7 +396,7 @@ describe('proxy-vapi-dtmf: /codeGather upstream HTTP 500', () => {
 
   test('catch-path hangup X-Reason === "Code lookup error"', async() => {
     client.sendHook('/codeGather', {reason: 'dtmfDetected', digits: '1234'});
-    const frame = await waitForAckWithVerb(client, 'hangup');
+    const frame = await waitForCommandWithVerb(client, 'hangup');
     const hangupVerb = pickVerb(frame, 'hangup');
     expect(hangupVerb.headers['X-Reason']).toBe('Code lookup error');
   }, 5000);
@@ -398,6 +413,91 @@ describe('proxy-vapi-dtmf: /codeGather upstream HTTP 500', () => {
     expect(hangupVerb).not.toBeUndefined();
     // Either the error_message or fallback "Invalid code" — both are valid per source
     expect(['500 with json', 'Invalid code']).toContain(hangupVerb.headers['X-Reason']);
+  }, 5000);
+});
+
+// ---------------------------------------------------------------------------
+// Suite E2 — Upstream timeout: lookup exceeds DTMF_LOOKUP_TIMEOUT_MS => hangup
+//
+// The route aborts the fetch via AbortSignal.timeout(DTMF_LOOKUP_TIMEOUT_MS).
+// We configure a short timeout and make the upstream stall longer than that so
+// the abort fires deterministically (no real 5s wait). On timeout the route
+// must hang up with X-Reason "Code lookup timeout" — and use .send() (not
+// .reply()) so jambonz force-closes the call.
+// ---------------------------------------------------------------------------
+
+describe('proxy-vapi-dtmf: /codeGather upstream timeout', () => {
+  let upstream, ctx, client, pending;
+
+  beforeEach(async() => {
+    upstream = await startFakeUpstream();
+    pending = [];
+    // Stall the lookup well past the configured timeout. Hold the response
+    // open (never resolve within the window) so the client-side abort fires.
+    upstream.setHandler('post', '/v1/getPhoneNumberByDtfm', (req, res) => {
+      const timer = setTimeout(() => {
+        res.status(200).json({success: true, phone_number: '+15551234567'});
+      }, 1500);
+      // Track so afterEach can clear it and let the upstream close cleanly
+      pending.push({timer, res});
+    });
+    ctx = await startApp({
+      env: {
+        VERSA_BASE_URL: upstream.baseUrl,
+        VERSA_API_KEY: 'test-key',
+        DTMF_LOOKUP_TIMEOUT_MS: '200'
+      }
+    });
+    client = fakeJambonzClient(ctx.baseWsUrl, {path: '/proxy-vapi-dtmf'});
+    await client.connect();
+    client.sendSessionNew();
+    await client.waitFor((f) => f.type === 'ack', {timeoutMs: 2500});
+  });
+
+  afterEach(async() => {
+    for (const {timer, res} of pending) {
+      clearTimeout(timer);
+      try { res.end(); } catch (_e) { /* already closed */ }
+    }
+    await client.close();
+    await ctx.close();
+    await upstream.close();
+  });
+
+  test('lookup exceeding timeout sends a hangup verb via a command/redirect frame', async() => {
+    client.sendHook('/codeGather', {reason: 'dtmfDetected', digits: '1234'});
+    const frame = await waitForCommandWithVerb(client, 'hangup');
+    expect(frame.type).toBe('command');
+    expect(frame.command).toBe('redirect');
+    const hangupVerb = pickVerb(frame, 'hangup');
+    expect(hangupVerb).not.toBeUndefined();
+    expect(hangupVerb.verb).toBe('hangup');
+  }, 5000);
+
+  test('timeout hangup X-Reason === "Code lookup timeout"', async() => {
+    client.sendHook('/codeGather', {reason: 'dtmfDetected', digits: '1234'});
+    const frame = await waitForCommandWithVerb(client, 'hangup');
+    const hangupVerb = pickVerb(frame, 'hangup');
+    expect(hangupVerb.headers['X-Reason']).toBe('Code lookup timeout');
+  }, 5000);
+
+  test('no dial verb is produced when the lookup times out', async() => {
+    client.sendHook('/codeGather', {reason: 'dtmfDetected', digits: '1234'});
+    const frame = await waitForCommandWithVerb(client, 'hangup');
+    const dialVerb = pickVerb(frame, 'dial');
+    expect(dialVerb).toBeUndefined();
+  }, 5000);
+
+  test('fast upstream within the timeout window still dials (timeout does not fire early)', async() => {
+    // Override with a handler that responds well within 200ms
+    upstream.setHandler('post', '/v1/getPhoneNumberByDtfm', (req, res) => {
+      res.status(200).json({success: true, phone_number: '+15551234567'});
+    });
+    client.sendHook('/codeGather', {reason: 'dtmfDetected', digits: '1234'});
+    const frame = await waitForAckWithVerb(client, 'dial');
+    const dialVerb = pickVerb(frame, 'dial');
+    expect(dialVerb).not.toBeUndefined();
+    expect(dialVerb.callerId).toBe('+15551234567');
   }, 5000);
 });
 

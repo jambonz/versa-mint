@@ -290,7 +290,7 @@ describe('proxy-vapi-dtmf: /codeGather lookup failure (success:false)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Suite D — No code: reason !== 'dtmfDetected' => hangup "No code provided"
+// Suite D — No code: reason !== 'dtmfDetected' => force-close hangup "No code provided"
 // ---------------------------------------------------------------------------
 
 describe('proxy-vapi-dtmf: /codeGather no-code paths', () => {
@@ -313,7 +313,9 @@ describe('proxy-vapi-dtmf: /codeGather no-code paths', () => {
 
   test('timeout reason replies with hangup', async() => {
     client.sendHook('/codeGather', {reason: 'timeout'});
-    const frame = await waitForAckWithVerb(client, 'hangup');
+    const frame = await waitForCommandWithVerb(client, 'hangup');
+    expect(frame.type).toBe('command');
+    expect(frame.command).toBe('redirect');
     const hangupVerb = pickVerb(frame, 'hangup');
     expect(hangupVerb).not.toBeUndefined();
     expect(hangupVerb.verb).toBe('hangup');
@@ -321,35 +323,35 @@ describe('proxy-vapi-dtmf: /codeGather no-code paths', () => {
 
   test('timeout reason hangup X-Reason === "No code provided"', async() => {
     client.sendHook('/codeGather', {reason: 'timeout'});
-    const frame = await waitForAckWithVerb(client, 'hangup');
+    const frame = await waitForCommandWithVerb(client, 'hangup');
     const hangupVerb = pickVerb(frame, 'hangup');
     expect(hangupVerb.headers['X-Reason']).toBe('No code provided');
   }, 5000);
 
   test('dtmfDetected with empty digits string => hangup "No code provided"', async() => {
     client.sendHook('/codeGather', {reason: 'dtmfDetected', digits: ''});
-    const frame = await waitForAckWithVerb(client, 'hangup');
+    const frame = await waitForCommandWithVerb(client, 'hangup');
     const hangupVerb = pickVerb(frame, 'hangup');
     expect(hangupVerb.headers['X-Reason']).toBe('No code provided');
   }, 5000);
 
   test('dtmfDetected with no digits key => hangup "No code provided"', async() => {
     client.sendHook('/codeGather', {reason: 'dtmfDetected'});
-    const frame = await waitForAckWithVerb(client, 'hangup');
+    const frame = await waitForCommandWithVerb(client, 'hangup');
     const hangupVerb = pickVerb(frame, 'hangup');
     expect(hangupVerb.headers['X-Reason']).toBe('No code provided');
   }, 5000);
 
   test('random non-dtmfDetected reason => hangup "No code provided"', async() => {
     client.sendHook('/codeGather', {reason: 'bargein'});
-    const frame = await waitForAckWithVerb(client, 'hangup');
+    const frame = await waitForCommandWithVerb(client, 'hangup');
     const hangupVerb = pickVerb(frame, 'hangup');
     expect(hangupVerb.headers['X-Reason']).toBe('No code provided');
   }, 5000);
 
   test('no upstream lookup occurs on timeout reason', async() => {
     client.sendHook('/codeGather', {reason: 'timeout'});
-    await waitForAckWithVerb(client, 'hangup');
+    await waitForCommandWithVerb(client, 'hangup');
     const lookupReqs = upstream.requests.filter(
       (r) => r.path === '/v1/getPhoneNumberByDtfm'
     );
@@ -394,25 +396,39 @@ describe('proxy-vapi-dtmf: /codeGather upstream HTTP 500', () => {
     expect(hangupVerb.verb).toBe('hangup');
   }, 5000);
 
-  test('catch-path hangup X-Reason === "Code lookup error"', async() => {
+  test('HTTP 200 response body is not JSON — catch yields hangup via command/redirect', async() => {
+    upstream.setHandler('post', '/v1/getPhoneNumberByDtfm', (req, res) => {
+      res.status(200).send('not-json');
+    });
+    client.sendHook('/codeGather', {reason: 'dtmfDetected', digits: '1234'});
+    const frame = await waitForCommandWithVerb(client, 'hangup');
+    expect(frame.type).toBe('command');
+    expect(frame.command).toBe('redirect');
+    const hangupVerb = pickVerb(frame, 'hangup');
+    expect(hangupVerb).not.toBeUndefined();
+    expect(hangupVerb.headers['X-Reason']).toBe('Invalid code lookup response');
+  }, 5000);
+
+  test('catch-path hangup X-Reason === "Invalid code lookup response"', async() => {
     client.sendHook('/codeGather', {reason: 'dtmfDetected', digits: '1234'});
     const frame = await waitForCommandWithVerb(client, 'hangup');
     const hangupVerb = pickVerb(frame, 'hangup');
-    expect(hangupVerb.headers['X-Reason']).toBe('Code lookup error');
+    expect(hangupVerb.headers['X-Reason']).toBe('Invalid code lookup response');
   }, 5000);
 
-  test('HTTP 500 with JSON body (success:false) takes failure branch not catch — hangup with body.error_message or "Invalid code"', async() => {
+  test('HTTP 500 with JSON body sends hangup via command/redirect using body.error_message', async() => {
     // When the 500 body IS parseable JSON but success:false, response.ok is false
-    // so it takes the !response.ok branch (not catch). X-Reason should be error_message or "Invalid code"
+    // so it takes the !response.ok branch (not catch) and force-closes the call.
     upstream.setHandler('post', '/v1/getPhoneNumberByDtfm', (req, res) => {
       res.status(500).json({success: false, error_message: '500 with json'});
     });
     client.sendHook('/codeGather', {reason: 'dtmfDetected', digits: '5555'});
-    const frame = await waitForAckWithVerb(client, 'hangup');
+    const frame = await waitForCommandWithVerb(client, 'hangup');
+    expect(frame.type).toBe('command');
+    expect(frame.command).toBe('redirect');
     const hangupVerb = pickVerb(frame, 'hangup');
     expect(hangupVerb).not.toBeUndefined();
-    // Either the error_message or fallback "Invalid code" — both are valid per source
-    expect(['500 with json', 'Invalid code']).toContain(hangupVerb.headers['X-Reason']);
+    expect(hangupVerb.headers['X-Reason']).toBe('500 with json');
   }, 5000);
 });
 

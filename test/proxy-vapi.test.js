@@ -498,6 +498,80 @@ describe('(f) /dialRefer refer_to_user only -> sip:refer', () => {
     expect(sipRefer.actionHook).toBe('/sipReferAction');
   });
 
+  test('sip_refer_to with uri params is relayed verbatim, not reduced to refer_to_user', async() => {
+    client = await makeConnectedClient();
+    client.sendSessionNew();
+    await client.waitFor((f) => f.type === 'ack', {timeoutMs: TIMEOUT});
+
+    const hookMsgid = client.sendHook('/dialRefer', {
+      refer_details: {
+        sip_refer_to: '<sip:transfer-target@refer.example.invalid;user=phone;transport=tcp>',
+        refer_to_user: 'transfer-target',
+        sip_referred_by: '<sip:callee@example.invalid>',
+        sip_user_agent: 'some-pbx'
+      }
+    });
+    const frame = await client.waitFor(
+      (f) => f.type === 'ack' && f.msgid === hookMsgid,
+      {timeoutMs: TIMEOUT}
+    );
+
+    const sipRefer = frame.data[0];
+    expect(sipRefer.verb).toBe('sip:refer');
+    expect(sipRefer.referTo).toBe('<sip:transfer-target@refer.example.invalid;user=phone;transport=tcp>');
+    expect(sipRefer.referredBy).toBe('<sip:callee@example.invalid>');
+    expect(sipRefer.actionHook).toBe('/sipReferAction');
+    expect(sipRefer.headers).toBeUndefined();
+  });
+
+  test('custom x_ headers are forwarded, app control headers are not', async() => {
+    client = await makeConnectedClient();
+    client.sendSessionNew();
+    await client.waitFor((f) => f.type === 'ack', {timeoutMs: TIMEOUT});
+
+    const hookMsgid = client.sendHook('/dialRefer', {
+      refer_details: {
+        sip_refer_to: '<sip:transfer-target@refer.example.invalid;user=phone>',
+        refer_to_user: 'transfer-target',
+        x_versa_custom: 'passthrough-value',
+        x_account_ref: 'acct-42',
+        x_caller_id: '+15551112222',
+        x_dial_music: 'http://example.com/hold.wav'
+      }
+    });
+    const frame = await client.waitFor(
+      (f) => f.type === 'ack' && f.msgid === hookMsgid,
+      {timeoutMs: TIMEOUT}
+    );
+
+    const sipRefer = frame.data[0];
+    expect(sipRefer.verb).toBe('sip:refer');
+    expect(sipRefer.headers).toEqual({
+      'X-Versa-Custom': 'passthrough-value',
+      'X-Account-Ref': 'acct-42'
+    });
+  });
+
+  test('sip_refer_to with an embedded uri header is relayed', async() => {
+    client = await makeConnectedClient();
+    client.sendSessionNew();
+    await client.waitFor((f) => f.type === 'ack', {timeoutMs: TIMEOUT});
+
+    const referTo = '<sip:+61399301264@eims-asd-201and202.itrunk.business.connect.telstra.com?X-Vapi-Call-Id=01a07bde-a47b-799f-a444-56afa78ec458>';
+    const hookMsgid = client.sendHook('/dialRefer', {
+      refer_details: {
+        sip_refer_to: referTo,
+        refer_to_user: '+61399301264'
+      }
+    });
+    const frame = await client.waitFor(
+      (f) => f.type === 'ack' && f.msgid === hookMsgid,
+      {timeoutMs: TIMEOUT}
+    );
+    expect(frame.data[0].verb).toBe('sip:refer');
+    expect(frame.data[0].referTo).toBe(referTo);
+  });
+
   test('empty refer_details (no refer_to_user) -> verb validation throws, no reply frame sent', async() => {
     // SPEC GAP: when refer_to_user is absent, the else branch calls
     // sip_refer({referTo: undefined}) which fails verb validation and throws

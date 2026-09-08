@@ -638,6 +638,41 @@ describe('proxy-vapi-dtmf: /dialRefer reset and x_dest', () => {
     expect(sipReferVerb.referTo).toBe('sip:+15559998888@example.com');
     expect(sipReferVerb.actionHook).toBe('/sipReferAction');
   }, 5000);
+
+  test('dialRefer relays a Refer-To carrying an embedded uri header', async() => {
+    const referTo = '<sip:+61399301264@eims-asd-201and202.itrunk.business.connect.telstra.com?X-Vapi-Call-Id=01a07bde-a47b-799f-a444-56afa78ec458>';
+    const snapLen = client.received.length;
+    client.sendHook('/dialRefer', {
+      refer_details: {sip_refer_to: referTo, refer_to_user: '+61399301264'}
+    });
+    const frame = await waitForNewFrame(
+      snapLen,
+      (f) => f.type === 'ack' && Array.isArray(f.data) && f.data.some((v) => v.verb === 'sip:refer')
+    );
+    expect(frame.data.find((v) => v.verb === 'sip:refer').referTo).toBe(referTo);
+  }, 5000);
+
+  test('dialRefer relays sip_refer_to uri params and custom x_ headers', async() => {
+    const snapLen = client.received.length;
+    client.sendHook('/dialRefer', {
+      refer_details: {
+        sip_refer_to: '<sip:transfer-target@refer.example.invalid;user=phone;transport=tcp>',
+        refer_to_user: 'transfer-target',
+        sip_referred_by: '<sip:callee@example.invalid>',
+        x_versa_custom: 'passthrough-value',
+        x_caller_id: '+15551112222'
+      }
+    });
+    const frame = await waitForNewFrame(
+      snapLen,
+      (f) => f.type === 'ack' && Array.isArray(f.data) && f.data.some((v) => v.verb === 'sip:refer')
+    );
+    const sipReferVerb = frame.data.find((v) => v.verb === 'sip:refer');
+    expect(sipReferVerb.referTo).toBe('<sip:transfer-target@refer.example.invalid;user=phone;transport=tcp>');
+    expect(sipReferVerb.referredBy).toBe('<sip:callee@example.invalid>');
+    expect(sipReferVerb.headers).toEqual({'X-Versa-Custom': 'passthrough-value'});
+    expect(sipReferVerb.actionHook).toBe('/sipReferAction');
+  }, 5000);
 });
 
 // ---------------------------------------------------------------------------

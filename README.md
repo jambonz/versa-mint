@@ -9,6 +9,7 @@ A Node.js application for integrating Jambonz and VAPI phone services with DTMF 
 - DTMF sequence sending with configurable delays
 - SIP REFER handling for call transfers
 - Audio file serving for call music
+- SIP error simulator: DTMF code maps to a SIP / upstream error on the inbound INVITE
 
 ## Quick Start
 
@@ -59,8 +60,86 @@ enabled when **both** variables are set; otherwise it is disabled.
 ## Endpoints
 
 - **/proxy-vapi**: Main call routing endpoint
+- **/proxy-vapi-dtmf**: DTMF PIN gather then dial VAPI
 - **/dial-test-mint**: DTMF testing endpoint
+- **/sip-error**: SIP error simulator (see below)
+- **GET /sip-errors**: Catalog of DTMF codes, SIP statuses, and upstream aliases
 - **GET /audios/:audio**: Serves audio files
+
+## SIP error simulator (`/sip-error`)
+
+Point a Jambonz application at this websocket path to inject SIP failures.
+An inbound call with no 3-digit `To` / `X-Simulate-Error` is **declined
+immediately** with a random **common** code (no gather) so the carrier can see
+the real SIP status: `401` `403` `404` `408` `480` `486` `487` `500` `502`
+`503` `504` `603`, plus `900` (one stand-in for all VAPI failures → `502`).
+`To=401` / `To=900` / `X-Simulate-Error` still force a specific code. If
+Jambonz has already answered (account recording), `sip:decline` is skipped
+and the call is hung up instead.
+
+| DTMF | Result |
+| --- | --- |
+| `401` | `401 Unauthorized` — **Jambonz only** (`X-Reason: Jambonz unauthorized`) |
+| `407` | `407 Proxy Authentication Required` |
+| `403` / `404` / `480` / `486` | matching SIP status |
+| `300`–`380` | matching 3xx redirect |
+| `500` / `502` / `503` / `504` | matching 5xx |
+| `607` / `608` | Unwanted / Rejected |
+| `900` | `502` VAPI failed (use this for the VAPI-connect-fail path) |
+| `902` | `407` VAPI unauthorized (not 401) |
+| `901` / `903`–`911` | other upstream / VAPI aliases |
+| `200` | connect to VAPI (`answerOnBridge`); VAPI’s SIP status is sent back, except **VAPI 401 is remapped to 407** |
+| anything else | `400 Bad Request` (`X-Reason: Unknown error code`) |
+| no digits / timeout | `408 Request Timeout` |
+
+`GET /sip-errors` returns the full table. Declines include `X-Reason`,
+`X-Error-Source` (`sip` / `upstream` / `vapi`), and `X-Dtmf-Code` when digits
+were gathered.
+
+### Simulating “Jambonz connected, VAPI then failed”
+
+The inbound INVITE must stay unanswered (`answerOnBridge`). After Jambonz has
+the session, a failed outbound INVITE can still `sip:decline` the original
+caller with VAPI’s SIP status.
+
+**1. Real VAPI hop (this app dials VAPI)**
+
+Call `/sip-error`, enter DTMF `200`. The app dials `APP_TRUNK_NAME`. If that
+INVITE fails (`486`, `503`, …), the same status is sent back on the inbound
+call. If VAPI itself returns `401`, it is remapped to **`407`** so it is not
+confused with Jambonz unauthorized. Force the failure by pointing the trunk
+at a down VAPI, a rejecting carrier, or an unroutable number.
+
+**2. Fake VAPI (this app *is* VAPI)** — use `900` / `902`, not `401`
+
+`/proxy-vapi` cannot send DTMF to `/sip-error` (the caller is on dial music).
+The outbound INVITE itself must carry the code:
+
+| On the INVITE to `/sip-error` | Result |
+| --- | --- |
+| `To` user is `900` (`sip:900@…`) | `502` VAPI failed |
+| `To` user is `902` | `407` VAPI unauthorized |
+| `To` user is `486`, `503`, … | matching catalog entry |
+| `To` user is `401` | `401` Jambonz unauthorized (not a VAPI failure) |
+| header `X-Simulate-Error: 900` (or `X-Sip-Error`) | same, header wins over `To` |
+
+Jambonz setup:
+
+1. Application **sip-error** → `wss://<host>/sip-error`
+2. Application **proxy** → `wss://<host>/proxy-vapi`, `APP_TRUNK_NAME` = a
+   trunk that routes to the sip-error application
+3. Assign test numbers `900`, `902`, `486`, `503`, … to **proxy** (or dial
+   `sip:900@<sbc>` into proxy)
+
+Call `900` → proxy dials `900` on the VAPI trunk → `/sip-error` declines
+`502` → proxy’s `/dialAction` sees that status and declines the inbound
+INVITE. That is the full “connected to Jambonz, failed to connect to VAPI”
+path.
+
+**3. Local Jambonz unauthorized (does not dial VAPI)**
+
+Call `/sip-error` and enter DTMF `401` (or INVITE `To=401`). The inbound
+INVITE is declined with `401 Unauthorized` / `X-Reason: Jambonz unauthorized`.
 
 ## Deployment
 

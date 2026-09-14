@@ -308,3 +308,46 @@ describe('dial-test-mint: x-versa-sip-key guard (integration)', () => {
     expect(verbs).not.toContain('sip:decline');
   }, 6000);
 });
+
+// ---------------------------------------------------------------------------
+// Integration — sip-error route is also guarded
+// ---------------------------------------------------------------------------
+
+describe('sip-error: x-versa-sip-key guard (integration)', () => {
+  let ctx, client;
+
+  beforeEach(async() => {
+    ctx = await startApp({env: {X_VERSA_SIP_KEY: SIP_KEY}});
+  });
+
+  afterEach(async() => {
+    if (client) await client.close();
+    await ctx.close();
+  });
+
+  test('missing header => sip:decline 403, no gather', async() => {
+    client = fakeJambonzClient(ctx.baseWsUrl, {path: '/sip-error'});
+    await client.connect();
+    client.sendSessionNew();
+    const frame = await client.waitFor(
+      (f) => f.type === 'ack' && Array.isArray(f.data) && f.data.some((v) => v.verb === 'sip:decline'),
+      {timeoutMs: 2500}
+    );
+    const decline = frame.data.find((v) => v.verb === 'sip:decline');
+    expect(decline.status).toBe(403);
+    expect(frame.data.some((v) => v.verb === 'gather')).toBe(false);
+  }, 6000);
+
+  test('valid header => proceeds with gather', async() => {
+    client = fakeJambonzClient(ctx.baseWsUrl, {
+      path: '/sip-error',
+      sessionData: {sip: {headers: {'x-versa-sip-key': SIP_KEY}}}
+    });
+    await client.connect();
+    client.sendSessionNew();
+    const frame = await client.waitFor((f) => f.type === 'ack', {timeoutMs: 2500});
+    const verbs = frame.data.map((v) => v.verb);
+    expect(verbs).toContain('gather');
+    expect(verbs).not.toContain('sip:decline');
+  }, 6000);
+});

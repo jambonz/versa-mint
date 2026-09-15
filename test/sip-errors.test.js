@@ -2,11 +2,14 @@
 
 const {
   CONNECT_CODE,
+  CONNECT_THEN_FAIL_CODE,
   SIP_ERRORS,
   UPSTREAM_ERRORS,
   normalizeDigits,
   resolveErrorCode,
   isConnectCode,
+  isConnectThenFail,
+  hangupForConnectThenFail,
   errorCodeFromInvite,
   inviteUserPart,
   reasonForStatus,
@@ -99,6 +102,11 @@ describe('sip-errors catalog', () => {
     expect(errorCodeFromInvite({
       sip: {headers: {'x-sip-error': '900'}}
     })).toBe('900');
+    expect(errorCodeFromInvite({to: '920'})).toBe('920');
+    expect(errorCodeFromInvite({
+      to: '+15550002222',
+      sip: {headers: {'X-Simulate-Error': '920'}}
+    })).toBe('920');
     expect(errorCodeFromInvite({
       to: '401',
       sip: {headers: {'X-Simulate-Error': '486'}}
@@ -106,14 +114,15 @@ describe('sip-errors catalog', () => {
     expect(inviteUserPart('sip:401@host')).toBe('401');
   });
 
-  test('pickRandomErrorCode returns a catalog code and never 200', () => {
+  test('pickRandomErrorCode returns a catalog or connect-then-fail code, never 200', () => {
     const {pickRandomErrorCode, ERROR_CODE_POOL, resolveErrorCode} = require('../lib/routes/utils');
     expect(ERROR_CODE_POOL).toEqual([
       '401', '403', '404', '408',
-      '480', '486', '487',
+      '480', '486', '487', '488',
       '500', '502', '503', '504',
-      '603',
-      '900'
+      '600', '603', '608',
+      '900',
+      '920'
     ]);
     expect(ERROR_CODE_POOL).not.toContain('200');
     const seen = new Set();
@@ -121,7 +130,12 @@ describe('sip-errors catalog', () => {
       const code = pickRandomErrorCode(() => i / ERROR_CODE_POOL.length);
       seen.add(code);
       expect(ERROR_CODE_POOL).toContain(code);
-      expect(resolveErrorCode(code)).not.toBeNull();
+      if (code === CONNECT_THEN_FAIL_CODE) {
+        expect(resolveErrorCode(code)).toBeNull();
+        expect(isConnectThenFail(code)).toBe(true);
+      } else {
+        expect(resolveErrorCode(code)).not.toBeNull();
+      }
     }
     expect(seen.size).toBe(ERROR_CODE_POOL.length);
     expect(resolveErrorCode('900')).toMatchObject({status: 502, label: 'VAPI failed'});
@@ -133,6 +147,21 @@ describe('sip-errors catalog', () => {
     expect(isConnectCode('401')).toBe(false);
     expect(resolveErrorCode('200')).toBeNull();
     expect(CONNECT_CODE).toBe('200');
+  });
+
+  test('920 is connect-then-fail, not a sip:decline catalog entry', () => {
+    expect(isConnectThenFail('920')).toBe(true);
+    expect(isConnectThenFail(920)).toBe(true);
+    expect(isConnectThenFail('900')).toBe(false);
+    expect(resolveErrorCode('920')).toBeNull();
+    expect(CONNECT_THEN_FAIL_CODE).toBe('920');
+    expect(hangupForConnectThenFail()).toEqual({
+      headers: {
+        'X-Reason': 'VAPI failed',
+        'X-Error-Source': 'vapi',
+        'X-Dtmf-Code': '920'
+      }
+    });
   });
 
   test('declineForDigits uses catalog reason and source', () => {
@@ -209,6 +238,11 @@ describe('sip-errors catalog', () => {
       dtmf: '200',
       action: 'dial-vapi',
       description: 'Connect to VAPI; pass any SIP failure back (VAPI 401 is remapped to 407)'
+    });
+    expect(listed.connectThenFail).toEqual({
+      dtmf: '920',
+      action: 'answer-then-hangup',
+      description: 'Answer inbound (SIP 200) then hang up as VAPI failed so the caller sees 200 + BYE'
     });
     expect(listed.sip.length).toBe(Object.keys(SIP_ERRORS).length);
     expect(listed.upstream.length).toBe(Object.keys(UPSTREAM_ERRORS).length);

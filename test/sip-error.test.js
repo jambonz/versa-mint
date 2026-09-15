@@ -32,6 +32,11 @@ describe('GET /sip-errors', () => {
     const res = await request(ctx.app).get('/sip-errors');
     expect(res.status).toBe(200);
     expect(res.body.connect.dtmf).toBe('200');
+    expect(res.body.connectThenFail).toEqual({
+      dtmf: '920',
+      action: 'answer-then-hangup',
+      description: 'Answer inbound (SIP 200) then hang up as VAPI failed so the caller sees 200 + BYE'
+    });
     expect(res.body.sip.some((e) => e.status === 401 && e.reason === 'Unauthorized')).toBe(true);
     expect(res.body.sip.some((e) => e.status === 301 && e.reason === 'Moved Permanently')).toBe(true);
     expect(res.body.sip.some((e) => e.status === 608 && e.reason === 'Rejected')).toBe(true);
@@ -52,16 +57,22 @@ describe('sip-error: session:new declines immediately without gather', () => {
     await ctx.close();
   });
 
-  test('DID with a long To user declines a catalog SIP status — no gather, no answer', async() => {
+  test('DID with a long To user acts immediately — no gather', async() => {
     client.sendSessionNew();
     const frame = await client.waitFor((f) => f.type === 'ack', {timeoutMs: TIMEOUT});
     const verbs = frame.data.map((v) => v.verb);
-    expect(verbs).toContain('sip:decline');
     expect(verbs).not.toContain('gather');
-    expect(verbs).not.toContain('answer');
-    const decline = pickVerb(frame, 'sip:decline');
-    expect(decline.status).toBeGreaterThanOrEqual(300);
-    expect(decline.reason).toBeTruthy();
+    if (verbs.includes('answer')) {
+      expect(verbs).toContain('hangup');
+      expect(verbs).not.toContain('sip:decline');
+      expect(pickVerb(frame, 'hangup').headers['X-Reason']).toBe('VAPI failed');
+    } else {
+      expect(verbs).toContain('sip:decline');
+      expect(verbs).not.toContain('answer');
+      const decline = pickVerb(frame, 'sip:decline');
+      expect(decline.status).toBeGreaterThanOrEqual(300);
+      expect(decline.reason).toBeTruthy();
+    }
   });
 });
 
@@ -134,6 +145,23 @@ describe('sip-error: DTMF maps to sip:decline', () => {
     const decline = pickVerb(frame, 'sip:decline');
     expect(decline.status).toBe(status);
     expect(decline.reason).toBe(reason);
+  });
+
+  test('920 answers then hangs up as VAPI failed', async() => {
+    const msgid = client.sendHook('/codeGather', {reason: 'dtmfDetected', digits: '920'});
+    const frame = await client.waitFor(
+      (f) => f.type === 'ack' && f.msgid === msgid,
+      {timeoutMs: TIMEOUT}
+    );
+    const verbs = frame.data.map((v) => v.verb);
+    expect(verbs).toContain('answer');
+    expect(verbs).toContain('hangup');
+    expect(verbs).not.toContain('sip:decline');
+    expect(pickVerb(frame, 'hangup').headers).toEqual({
+      'X-Reason': 'VAPI failed',
+      'X-Error-Source': 'vapi',
+      'X-Dtmf-Code': '920'
+    });
   });
 
   test('900 (VAPI failed) declines as 502 with upstream source', async() => {
@@ -323,6 +351,23 @@ describe('sip-error: INVITE To / header simulates a VAPI that fails immediately'
       expect(decline.status).toBe(486);
       expect(decline.reason).toBe('Busy Here');
       expect(frame.data.some((v) => v.verb === 'gather')).toBe(false);
+    } finally {
+      await client.close();
+    }
+  });
+
+  test('To=920 answers then hangs up as VAPI failed (200 + BYE)', async() => {
+    const client = await connectClient(ctx, {to: '920'});
+    try {
+      client.sendSessionNew();
+      const frame = await client.waitFor((f) => f.type === 'ack', {timeoutMs: TIMEOUT});
+      const verbs = frame.data.map((v) => v.verb);
+      expect(verbs).toContain('answer');
+      expect(verbs).toContain('hangup');
+      expect(verbs).not.toContain('sip:decline');
+      expect(verbs).not.toContain('gather');
+      expect(pickVerb(frame, 'hangup').headers['X-Reason']).toBe('VAPI failed');
+      expect(pickVerb(frame, 'hangup').headers['X-Error-Source']).toBe('vapi');
     } finally {
       await client.close();
     }
